@@ -25,13 +25,17 @@ const LANE_WIDTH = 30;
 const FOLLOW_GAP = 14;
 const STOP_BUFFER = 8;
 const MAX_VEHICLE_LENGTH = 56;
-const STOP_MARGIN = 3;
+const STOP_MARGIN = 8;
 const STOP_EPSILON = 0.25;
+const BIKE_LANE_WIDTH = 14;
+const FOOTPATH_WIDTH = 18;
+const BIKE_FOLLOW_GAP = 10;
+const CROSSING_OFFSET = 14;
 
 const VEHICLE_TYPES = [
-  { kind: "car", weight: 0.58, length: 34, width: 18, minSpeed: 85, maxSpeed: 125 },
-  { kind: "truck", weight: 0.22, length: 52, width: 22, minSpeed: 58, maxSpeed: 85 },
-  { kind: "bike", weight: 0.2, length: 24, width: 10, minSpeed: 95, maxSpeed: 145 },
+  { kind: "car", weight: 0.58, length: 25, width: 14, minSpeed: 85, maxSpeed: 125 },
+  { kind: "truck", weight: 0.22, length: 40, width: 17, minSpeed: 58, maxSpeed: 85 },
+  { kind: "bike", weight: 0.2, length: 18, width: 7, minSpeed: 95, maxSpeed: 145 },
 ];
 
 const palette = ["#2e7d32", "#6a1b9a", "#ef6c00", "#0277bd", "#5d4037", "#d81b60"];
@@ -43,8 +47,20 @@ const state = {
     E: [],
     W: [],
   },
+  bikeLanes: {
+    N: { approach: "N", bikes: [], spawnTimer: 0 },
+    S: { approach: "S", bikes: [], spawnTimer: 0 },
+    E: { approach: "E", bikes: [], spawnTimer: 0 },
+    W: { approach: "W", bikes: [], spawnTimer: 0 },
+  },
+  pedestrianCrossings: {
+    W: { key: "W", walkers: [], spawnTimer: 0 },
+    E: { key: "E", walkers: [], spawnTimer: 0 },
+    N: { key: "N", walkers: [], spawnTimer: 0 },
+    S: { key: "S", walkers: [], spawnTimer: 0 },
+  },
   laneCount: 3,
-  spawnPerMinute: 24,
+  spawnPerMinute: 5,
   phaseDurations: {
     green: 7,
     yellow: 2,
@@ -144,6 +160,16 @@ function buildLanes(count) {
   state.lanes.S = makeGroup("S");
   state.lanes.E = makeGroup("E");
   state.lanes.W = makeGroup("W");
+
+  state.bikeLanes.N = { approach: "N", bikes: [], spawnTimer: 0 };
+  state.bikeLanes.S = { approach: "S", bikes: [], spawnTimer: 0 };
+  state.bikeLanes.E = { approach: "E", bikes: [], spawnTimer: 0 };
+  state.bikeLanes.W = { approach: "W", bikes: [], spawnTimer: 0 };
+
+  state.pedestrianCrossings.W = { key: "W", walkers: [], spawnTimer: 0 };
+  state.pedestrianCrossings.E = { key: "E", walkers: [], spawnTimer: 0 };
+  state.pedestrianCrossings.N = { key: "N", walkers: [], spawnTimer: 0 };
+  state.pedestrianCrossings.S = { key: "S", walkers: [], spawnTimer: 0 };
 }
 
 function resizeCanvas() {
@@ -222,6 +248,7 @@ function pickVehicleType() {
 
 function createCar(lane) {
   const type = pickVehicleType();
+
   return {
     id: state.idCounter++,
     d: 0,
@@ -246,22 +273,90 @@ function maybeSpawnCars(dt) {
   });
 }
 
+function createBikeRider() {
+  return {
+    id: state.idCounter++,
+    d: 0,
+    kind: "bike",
+    length: 16,
+    width: 6,
+    speed: 90 + Math.random() * 28,
+    isBraking: false,
+    color: "#f5f7fa",
+  };
+}
+
+function canSpawnInBikeLane(lane) {
+  if (lane.bikes.length === 0) return true;
+  return lane.bikes[0].d > lane.bikes[0].length + BIKE_FOLLOW_GAP;
+}
+
+function maybeSpawnBikeLaneTraffic(dt) {
+  const bikeSpawnInterval = 60 / Math.max(3, state.spawnPerMinute * 0.8);
+  Object.values(state.bikeLanes).forEach((lane) => {
+    lane.spawnTimer += dt;
+    if (lane.spawnTimer >= bikeSpawnInterval) {
+      lane.spawnTimer = 0;
+      if (!canSpawnInBikeLane(lane)) return;
+      lane.bikes.push(createBikeRider());
+    }
+  });
+}
+
+function crossingAllowsWalk(crossingKey) {
+  if (crossingKey === "W" || crossingKey === "E") {
+    return !approachHasGreen("W");
+  }
+  return !approachHasGreen("N");
+}
+
+function createWalker() {
+  const fromStart = Math.random() > 0.5;
+  return {
+    id: state.idCounter++,
+    progress: fromStart ? 0 : 1,
+    direction: fromStart ? 1 : -1,
+    targetSpeed: 0.2 + Math.random() * 0.12,
+    speedCurrent: 0,
+    walkPhase: Math.random() * Math.PI * 2,
+    idlePhase: Math.random() * Math.PI * 2,
+    isWaiting: false,
+    lateralOffset: (Math.random() - 0.5) * 5,
+    strideScale: 0.82 + Math.random() * 0.36,
+    color: "#455a64",
+  };
+}
+
+function maybeSpawnPedestrians(dt) {
+  const spawnInterval = Math.max(6, 45 / Math.max(5, state.spawnPerMinute));
+  Object.values(state.pedestrianCrossings).forEach((crossing) => {
+    crossing.spawnTimer += dt;
+    if (crossing.spawnTimer < spawnInterval) return;
+    crossing.spawnTimer = 0;
+    if (!crossingAllowsWalk(crossing.key)) return;
+
+    const candidate = createWalker();
+    const spawnGuard = 0.15;
+    const tooCloseToSpawn = crossing.walkers.some((walker) => {
+      if (candidate.direction > 0) return walker.progress < spawnGuard;
+      return walker.progress > 1 - spawnGuard;
+    });
+
+    if (tooCloseToSpawn) return;
+    crossing.walkers.push(candidate);
+  });
+}
+
 function lanePathLength(approach) {
   if (approach === "W" || approach === "E") return canvas.width + MAX_VEHICLE_LENGTH * 2;
   return canvas.height + MAX_VEHICLE_LENGTH * 2;
 }
 
-function stopDistanceForCar(approach, carLength) {
+function stopDistanceForCar(approach) {
   const { stopLines } = state.geometry;
-  if (approach === "W") {
-    return stopLines.W - STOP_MARGIN;
-  }
-  if (approach === "E") {
-    return canvas.width - (stopLines.E + STOP_MARGIN);
-  }
-  if (approach === "N") {
-    return stopLines.N - STOP_MARGIN;
-  }
+  if (approach === "W") return stopLines.W - STOP_MARGIN;
+  if (approach === "E") return canvas.width - (stopLines.E + STOP_MARGIN);
+  if (approach === "N") return stopLines.N - STOP_MARGIN;
   return canvas.height - (stopLines.S + STOP_MARGIN);
 }
 
@@ -278,7 +373,7 @@ function updateCars(dt) {
     for (let i = lane.cars.length - 1; i >= 0; i -= 1) {
       const car = lane.cars[i];
       const ahead = lane.cars[i + 1] ?? null;
-      const stopDistance = stopDistanceForCar(lane.approach, car.length);
+      const stopDistance = stopDistanceForCar(lane.approach);
 
       let maxAllowedD = Number.POSITIVE_INFINITY;
 
@@ -301,44 +396,90 @@ function updateCars(dt) {
   });
 }
 
+function updateBikeLaneTraffic(dt) {
+  Object.values(state.bikeLanes).forEach((lane) => {
+    const canProceed = approachHasGreen(lane.approach);
+    lane.bikes.sort((a, b) => a.d - b.d);
+
+    for (let i = lane.bikes.length - 1; i >= 0; i -= 1) {
+      const bike = lane.bikes[i];
+      const ahead = lane.bikes[i + 1] ?? null;
+      const stopDistance = stopDistanceForCar(lane.approach);
+
+      let maxAllowedD = Number.POSITIVE_INFINITY;
+
+      if (!canProceed && bike.d <= stopDistance + STOP_EPSILON) {
+        maxAllowedD = Math.min(maxAllowedD, stopDistance);
+      }
+
+      if (ahead) {
+        maxAllowedD = Math.min(maxAllowedD, ahead.d - ahead.length - BIKE_FOLLOW_GAP);
+      }
+
+      const proposed = bike.d + bike.speed * dt;
+      const nextD = Math.min(proposed, maxAllowedD);
+      bike.isBraking = nextD + 0.1 < proposed;
+      bike.d = nextD;
+    }
+
+    const maxDistance = lanePathLength(lane.approach);
+    lane.bikes = lane.bikes.filter((bike) => bike.d < maxDistance + bike.length + 40);
+  });
+}
+
+function updatePedestrians(dt) {
+  Object.values(state.pedestrianCrossings).forEach((crossing) => {
+    const canWalk = crossingAllowsWalk(crossing.key);
+    crossing.walkers.forEach((walker) => {
+      const blend = Math.min(1, dt * 5);
+      const desiredSpeed = canWalk ? walker.targetSpeed : 0;
+      walker.speedCurrent += (desiredSpeed - walker.speedCurrent) * blend;
+
+      const edgeDistance = Math.min(walker.progress, 1 - walker.progress);
+      const edgeFactor = edgeDistance < 0.1 ? 0.45 + (edgeDistance / 0.1) * 0.55 : 1;
+
+      walker.progress += walker.direction * walker.speedCurrent * edgeFactor * dt;
+      walker.walkPhase += dt * (2 + walker.speedCurrent * 26 * walker.strideScale);
+      walker.idlePhase += dt * 2.2;
+      walker.isWaiting = !canWalk && walker.speedCurrent < 0.03;
+    });
+
+    crossing.walkers = crossing.walkers.filter((walker) => walker.progress >= 0 && walker.progress <= 1);
+  });
+}
+
 function lanePosition(lane) {
   const geometry = state.geometry;
-  if (lane.approach === "W") return { constant: geometry.laneYWest(lane.index), orientation: "horizontal" };
-  if (lane.approach === "E") return { constant: geometry.laneYEast(lane.index), orientation: "horizontal" };
-  if (lane.approach === "N") return { constant: geometry.laneXNorth(lane.index), orientation: "vertical" };
-  return { constant: geometry.laneXSouth(lane.index), orientation: "vertical" };
+  if (lane.approach === "W") return { constant: geometry.laneYWest(lane.index) };
+  if (lane.approach === "E") return { constant: geometry.laneYEast(lane.index) };
+  if (lane.approach === "N") return { constant: geometry.laneXNorth(lane.index) };
+  return { constant: geometry.laneXSouth(lane.index) };
 }
 
 function carPose(lane, car) {
   const { constant } = lanePosition(lane);
 
-  if (lane.approach === "W") {
-    return {
-      x: -car.length / 2 + car.d,
-      y: constant,
-      heading: 0,
-    };
-  }
-  if (lane.approach === "E") {
-    return {
-      x: canvas.width + car.length / 2 - car.d,
-      y: constant,
-      heading: Math.PI,
-    };
-  }
-  if (lane.approach === "N") {
-    return {
-      x: constant,
-      y: -car.length / 2 + car.d,
-      heading: Math.PI / 2,
-    };
-  }
+  if (lane.approach === "W") return { x: -car.length / 2 + car.d, y: constant, heading: 0 };
+  if (lane.approach === "E") return { x: canvas.width + car.length / 2 - car.d, y: constant, heading: Math.PI };
+  if (lane.approach === "N") return { x: constant, y: -car.length / 2 + car.d, heading: Math.PI / 2 };
+  return { x: constant, y: canvas.height + car.length / 2 - car.d, heading: -Math.PI / 2 };
+}
 
-  return {
-    x: constant,
-    y: canvas.height + car.length / 2 - car.d,
-    heading: -Math.PI / 2,
-  };
+function bikeLaneCenterForApproach(approach) {
+  const { centerX, centerY, halfRoad } = state.geometry;
+  if (approach === "W") return centerY - halfRoad - BIKE_LANE_WIDTH / 2;
+  if (approach === "E") return centerY + halfRoad + BIKE_LANE_WIDTH / 2;
+  if (approach === "N") return centerX + halfRoad + BIKE_LANE_WIDTH / 2;
+  return centerX - halfRoad - BIKE_LANE_WIDTH / 2;
+}
+
+function bikePose(approach, bike) {
+  const constant = bikeLaneCenterForApproach(approach);
+
+  if (approach === "W") return { x: -bike.length / 2 + bike.d, y: constant, heading: 0 };
+  if (approach === "E") return { x: canvas.width + bike.length / 2 - bike.d, y: constant, heading: Math.PI };
+  if (approach === "N") return { x: constant, y: -bike.length / 2 + bike.d, heading: Math.PI / 2 };
+  return { x: constant, y: canvas.height + bike.length / 2 - bike.d, heading: -Math.PI / 2 };
 }
 
 function roundedBox(x, y, w, h, r) {
@@ -384,9 +525,7 @@ function drawHeadlights(car) {
 }
 
 function drawBrakeLights(car) {
-  if (!car.isBraking) {
-    return;
-  }
+  if (!car.isBraking) return;
 
   const bodyW = car.length;
   const bodyH = car.width;
@@ -502,18 +641,13 @@ function drawBikeSprite(car) {
 
 function drawVehicle(lane, car) {
   const pose = carPose(lane, car);
-
   ctx.save();
   ctx.translate(pose.x, pose.y);
   ctx.rotate(pose.heading);
 
-  if (car.kind === "truck") {
-    drawTruckSprite(car);
-  } else if (car.kind === "bike") {
-    drawBikeSprite(car);
-  } else {
-    drawCarSprite(car);
-  }
+  if (car.kind === "truck") drawTruckSprite(car);
+  else if (car.kind === "bike") drawBikeSprite(car);
+  else drawCarSprite(car);
 
   ctx.restore();
 }
@@ -623,6 +757,7 @@ function drawLaneDirectionIndicators(centerX, centerY, halfRoad) {
   const stop = state.geometry.stopLines;
   const nsCanGo = approachHasGreen("N");
   const ewCanGo = approachHasGreen("W");
+  const arrowOffset = 40;
 
   const nsColor = nsCanGo ? "#8de7a0" : "#ff8a80";
   const ewColor = ewCanGo ? "#8de7a0" : "#ff8a80";
@@ -647,30 +782,37 @@ function drawLaneDirectionIndicators(centerX, centerY, halfRoad) {
   ctx.restore();
 
   state.lanes.W.forEach((lane) => {
-    const y = state.geometry.laneYWest(lane.index);
-    drawArrowAt(stop.W - 18, y, 0, ewColor);
+    drawArrowAt(stop.W - arrowOffset, state.geometry.laneYWest(lane.index), 0, ewColor);
   });
 
   state.lanes.E.forEach((lane) => {
-    const y = state.geometry.laneYEast(lane.index);
-    drawArrowAt(stop.E + 18, y, Math.PI, ewColor);
+    drawArrowAt(stop.E + arrowOffset, state.geometry.laneYEast(lane.index), Math.PI, ewColor);
   });
 
   state.lanes.N.forEach((lane) => {
-    const x = state.geometry.laneXNorth(lane.index);
-    drawArrowAt(x, stop.N - 18, Math.PI / 2, nsColor);
+    drawArrowAt(state.geometry.laneXNorth(lane.index), stop.N - arrowOffset, Math.PI / 2, nsColor);
   });
 
   state.lanes.S.forEach((lane) => {
-    const x = state.geometry.laneXSouth(lane.index);
-    drawArrowAt(x, stop.S + 18, -Math.PI / 2, nsColor);
+    drawArrowAt(state.geometry.laneXSouth(lane.index), stop.S + arrowOffset, -Math.PI / 2, nsColor);
   });
 }
 
 function drawCars() {
   eachLane((lane) => {
-    lane.cars.forEach((car) => {
-      drawVehicle(lane, car);
+    lane.cars.forEach((car) => drawVehicle(lane, car));
+  });
+}
+
+function drawBikeLaneTraffic() {
+  Object.values(state.bikeLanes).forEach((lane) => {
+    lane.bikes.forEach((bike) => {
+      const pose = bikePose(lane.approach, bike);
+      ctx.save();
+      ctx.translate(pose.x, pose.y);
+      ctx.rotate(pose.heading);
+      drawBikeSprite(bike);
+      ctx.restore();
     });
   });
 }
@@ -737,6 +879,218 @@ function drawTrafficLights(centerX, centerY, halfRoad) {
   drawSignalHead(southLaneMidX, stop.S + 14, -Math.PI / 2, nsColor);
 }
 
+function drawBikeLanesAndFootpaths(centerX, centerY, halfRoad) {
+  const roadLeft = centerX - halfRoad;
+  const roadRight = centerX + halfRoad;
+  const roadTop = centerY - halfRoad;
+  const roadBottom = centerY + halfRoad;
+
+  const footpathColor = "#cfd8dc";
+  const bikeLaneColor = "#2e6a73";
+  const edgeLineColor = "rgba(255, 255, 255, 0.75)";
+
+  ctx.fillStyle = footpathColor;
+  ctx.fillRect(MARGIN, roadTop - BIKE_LANE_WIDTH - FOOTPATH_WIDTH, canvas.width - MARGIN * 2, FOOTPATH_WIDTH);
+  ctx.fillRect(MARGIN, roadBottom + BIKE_LANE_WIDTH, canvas.width - MARGIN * 2, FOOTPATH_WIDTH);
+  ctx.fillRect(roadLeft - BIKE_LANE_WIDTH - FOOTPATH_WIDTH, MARGIN, FOOTPATH_WIDTH, canvas.height - MARGIN * 2);
+  ctx.fillRect(roadRight + BIKE_LANE_WIDTH, MARGIN, FOOTPATH_WIDTH, canvas.height - MARGIN * 2);
+
+  ctx.fillStyle = bikeLaneColor;
+  ctx.fillRect(MARGIN, roadTop - BIKE_LANE_WIDTH, canvas.width - MARGIN * 2, BIKE_LANE_WIDTH);
+  ctx.fillRect(MARGIN, roadBottom, canvas.width - MARGIN * 2, BIKE_LANE_WIDTH);
+  ctx.fillRect(roadLeft - BIKE_LANE_WIDTH, MARGIN, BIKE_LANE_WIDTH, canvas.height - MARGIN * 2);
+  ctx.fillRect(roadRight, MARGIN, BIKE_LANE_WIDTH, canvas.height - MARGIN * 2);
+
+  ctx.strokeStyle = edgeLineColor;
+  ctx.lineWidth = 1.6;
+  ctx.setLineDash([8, 6]);
+
+  ctx.beginPath();
+  ctx.moveTo(MARGIN, roadTop - BIKE_LANE_WIDTH);
+  ctx.lineTo(canvas.width - MARGIN, roadTop - BIKE_LANE_WIDTH);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(MARGIN, roadBottom + BIKE_LANE_WIDTH);
+  ctx.lineTo(canvas.width - MARGIN, roadBottom + BIKE_LANE_WIDTH);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(roadLeft - BIKE_LANE_WIDTH, MARGIN);
+  ctx.lineTo(roadLeft - BIKE_LANE_WIDTH, canvas.height - MARGIN);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(roadRight + BIKE_LANE_WIDTH, MARGIN);
+  ctx.lineTo(roadRight + BIKE_LANE_WIDTH, canvas.height - MARGIN);
+  ctx.stroke();
+
+  ctx.setLineDash([]);
+}
+
+function drawPedestrianCrossings(centerX, centerY, halfRoad) {
+  const stop = state.geometry.stopLines;
+  const roadLeft = centerX - halfRoad;
+  const roadRight = centerX + halfRoad;
+  const roadTop = centerY - halfRoad;
+  const roadBottom = centerY + halfRoad;
+
+  const topEdge = roadTop - BIKE_LANE_WIDTH;
+  const bottomEdge = roadBottom + BIKE_LANE_WIDTH;
+  const leftEdge = roadLeft - BIKE_LANE_WIDTH;
+  const rightEdge = roadRight + BIKE_LANE_WIDTH;
+
+  const crossWidth = 10;
+  const stripe = 3;
+  const gap = 5;
+  const westX = stop.W + CROSSING_OFFSET;
+  const eastX = stop.E - CROSSING_OFFSET;
+  const northY = stop.N + CROSSING_OFFSET;
+  const southY = stop.S - CROSSING_OFFSET;
+
+  ctx.fillStyle = "rgba(255, 255, 255, 0.68)";
+
+  for (let y = topEdge + 2; y <= bottomEdge - stripe - 2; y += stripe + gap) {
+    ctx.fillRect(westX - crossWidth / 2, y, crossWidth, stripe);
+    ctx.fillRect(eastX - crossWidth / 2, y, crossWidth, stripe);
+  }
+
+  for (let x = leftEdge + 2; x <= rightEdge - stripe - 2; x += stripe + gap) {
+    ctx.fillRect(x, northY - crossWidth / 2, stripe, crossWidth);
+    ctx.fillRect(x, southY - crossWidth / 2, stripe, crossWidth);
+  }
+}
+
+function drawMobilitySignals(centerX, centerY, halfRoad) {
+  const stop = state.geometry.stopLines;
+
+  function drawSignalPanel(x, y, canGo, iconType) {
+    const panelW = 26;
+    const panelH = 18;
+
+    ctx.fillStyle = "#1a1f25";
+    roundedBox(x - panelW / 2, y - panelH / 2, panelW, panelH, 4);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.22)";
+    ctx.lineWidth = 1;
+    roundedBox(x - panelW / 2, y - panelH / 2, panelW, panelH, 4);
+    ctx.stroke();
+
+    ctx.fillStyle = canGo ? "#71e6a0" : "#ff8a80";
+    ctx.beginPath();
+    ctx.arc(x - 7, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#f5f7fa";
+    if (iconType === "bike") {
+      ctx.beginPath();
+      ctx.arc(x + 3, y + 1.5, 1.3, 0, Math.PI * 2);
+      ctx.arc(x + 9.2, y + 1.5, 1.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#f5f7fa";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x + 3, y + 1.5);
+      ctx.lineTo(x + 5.8, y - 2);
+      ctx.lineTo(x + 8, y + 1.5);
+      ctx.lineTo(x + 5, y + 1.5);
+      ctx.lineTo(x + 3, y + 1.5);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.arc(x + 6.5, y - 2.8, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#f5f7fa";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x + 6.5, y -1.4);
+      ctx.lineTo(x + 6.5, y + 3.5);
+      ctx.moveTo(x + 6.5, y + 0.4);
+      ctx.lineTo(x + 4.5, y + 2.4);
+      ctx.moveTo(x + 6.5, y + 0.4);
+      ctx.lineTo(x + 8.5, y + 2.4);
+      ctx.stroke();
+    }
+  }
+
+  drawSignalPanel(stop.W - 28, centerY - halfRoad - BIKE_LANE_WIDTH - 10, approachHasGreen("W"), "bike");
+  drawSignalPanel(stop.E + 28, centerY + halfRoad + BIKE_LANE_WIDTH + 10, approachHasGreen("E"), "bike");
+  drawSignalPanel(centerX + halfRoad + BIKE_LANE_WIDTH + 10, stop.N - 28, approachHasGreen("N"), "bike");
+  drawSignalPanel(centerX - halfRoad - BIKE_LANE_WIDTH - 10, stop.S + 28, approachHasGreen("S"), "bike");
+
+  drawSignalPanel(stop.W - 28, centerY, crossingAllowsWalk("W"), "ped");
+  drawSignalPanel(stop.E + 28, centerY, crossingAllowsWalk("E"), "ped");
+  drawSignalPanel(centerX, stop.N - 28, crossingAllowsWalk("N"), "ped");
+  drawSignalPanel(centerX, stop.S + 28, crossingAllowsWalk("S"), "ped");
+}
+
+function pedestrianPosition(crossingKey, progress) {
+  const { centerX, centerY, halfRoad, stopLines } = state.geometry;
+  const roadLeft = centerX - halfRoad;
+  const roadRight = centerX + halfRoad;
+  const roadTop = centerY - halfRoad;
+  const roadBottom = centerY + halfRoad;
+
+  const topEdge = roadTop - BIKE_LANE_WIDTH - FOOTPATH_WIDTH / 2;
+  const bottomEdge = roadBottom + BIKE_LANE_WIDTH + FOOTPATH_WIDTH / 2;
+  const leftEdge = roadLeft - BIKE_LANE_WIDTH - FOOTPATH_WIDTH / 2;
+  const rightEdge = roadRight + BIKE_LANE_WIDTH + FOOTPATH_WIDTH / 2;
+
+  if (crossingKey === "W") return { x: stopLines.W + CROSSING_OFFSET, y: topEdge + (bottomEdge - topEdge) * progress, heading: Math.PI / 2 };
+  if (crossingKey === "E") return { x: stopLines.E - CROSSING_OFFSET, y: topEdge + (bottomEdge - topEdge) * progress, heading: Math.PI / 2 };
+  if (crossingKey === "N") return { x: leftEdge + (rightEdge - leftEdge) * progress, y: stopLines.N + CROSSING_OFFSET, heading: 0 };
+  return { x: leftEdge + (rightEdge - leftEdge) * progress, y: stopLines.S - CROSSING_OFFSET, heading: 0 };
+}
+
+function drawWalkerSprite(walker) {
+  const swingBase = Math.sin(walker.walkPhase || 0);
+  const idleSwing = Math.sin(walker.idlePhase || 0) * 0.35;
+  const swing = walker.isWaiting ? idleSwing : swingBase;
+  const armSwing = swing * 2.2 * walker.strideScale;
+  const legSwing = -swing * 2.2 * walker.strideScale;
+  const bodyBob = walker.isWaiting ? Math.abs(idleSwing) * 0.35 : Math.abs(swing) * 0.6;
+
+  ctx.strokeStyle = walker.color;
+  ctx.fillStyle = walker.color;
+  ctx.lineWidth = 1.6;
+  ctx.lineCap = "round";
+
+  ctx.beginPath();
+  ctx.arc(0, -5.9 + bodyBob * 0.2, 2.2, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(0, -3.4 + bodyBob * 0.2);
+  ctx.lineTo(0, 2.6 + bodyBob * 0.4);
+
+  ctx.moveTo(0, -1.3 + bodyBob * 0.2);
+  ctx.lineTo(-2.4, 1 + armSwing * 0.45);
+  ctx.moveTo(0, -1.3 + bodyBob * 0.2);
+  ctx.lineTo(2.4, 1 - armSwing * 0.45);
+
+  ctx.moveTo(0, 2.6 + bodyBob * 0.4);
+  ctx.lineTo(-2, 6 + legSwing * 0.45);
+  ctx.moveTo(0, 2.6 + bodyBob * 0.4);
+  ctx.lineTo(2, 6 - legSwing * 0.45);
+  ctx.stroke();
+}
+
+function drawPedestrians() {
+  Object.values(state.pedestrianCrossings).forEach((crossing) => {
+    crossing.walkers.forEach((walker) => {
+      const pose = pedestrianPosition(crossing.key, walker.progress);
+      const sway = Math.sin((walker.walkPhase || 0) * 0.45) * 0.7;
+      ctx.save();
+      ctx.translate(pose.x, pose.y);
+      ctx.rotate(pose.heading);
+      ctx.translate(0, walker.lateralOffset + sway);
+      drawWalkerSprite(walker);
+      ctx.restore();
+    });
+  });
+}
+
 function drawScene() {
   const { centerX, centerY, halfRoad } = state.geometry;
 
@@ -745,14 +1099,20 @@ function drawScene() {
   ctx.fillStyle = "#d9ecff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+  drawBikeLanesAndFootpaths(centerX, centerY, halfRoad);
+
   ctx.fillStyle = "#3f4a57";
   ctx.fillRect(MARGIN, centerY - halfRoad, canvas.width - MARGIN * 2, halfRoad * 2);
   ctx.fillRect(centerX - halfRoad, MARGIN, halfRoad * 2, canvas.height - MARGIN * 2);
 
   drawRoadMarkings(centerX, centerY, halfRoad);
-  drawLaneDirectionIndicators(centerX, centerY, halfRoad);
+  drawPedestrianCrossings(centerX, centerY, halfRoad);
+  drawBikeLaneTraffic();
+  drawPedestrians();
   drawCars();
+  drawLaneDirectionIndicators(centerX, centerY, halfRoad);
   drawTrafficLights(centerX, centerY, halfRoad);
+  drawMobilitySignals(centerX, centerY, halfRoad);
 }
 
 function step(timestamp) {
@@ -765,7 +1125,11 @@ function step(timestamp) {
   updatePhase(dt);
   updatePhasePanel();
   maybeSpawnCars(dt);
+  maybeSpawnBikeLaneTraffic(dt);
+  maybeSpawnPedestrians(dt);
   updateCars(dt);
+  updateBikeLaneTraffic(dt);
+  updatePedestrians(dt);
   drawScene();
 
   requestAnimationFrame(step);
@@ -773,7 +1137,7 @@ function step(timestamp) {
 
 function applySettings() {
   state.laneCount = clamp(Number(laneCountInput.value) || 3, 1, 4);
-  state.spawnPerMinute = clamp(Number(spawnRateInput.value) || 24, 6, 120);
+  state.spawnPerMinute = clamp(Number(spawnRateInput.value) || 5, 5, 120);
   state.phaseDurations.green = clamp(Number(greenInput.value) || 7, 2, 20);
   state.phaseDurations.yellow = clamp(Number(yellowInput.value) || 2, 1, 8);
   state.phaseDurations.allRed = clamp(Number(redInput.value) || 2, 1, 10);
