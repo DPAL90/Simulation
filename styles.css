@@ -56,6 +56,14 @@ h1 {
   background: #0f4f9b;
 }
 
+#emergencyMode.active {
+  background: #c62828;
+}
+
+#emergencyMode.active:hover {
+  background: #a51f1f;
+}
+
 .statusRow {
   display: flex;
   align-items: center;
@@ -123,6 +131,10 @@ h1 {
 .phaseSubline {
   margin: 4px 0 0;
   font-size: 0.9rem;
+}
+
+#emergencyStatus {
+  font-weight: 700;
 }
 
 .stateBadge {

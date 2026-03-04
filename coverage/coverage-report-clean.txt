@@ -1,0 +1,41 @@
+ component: phaseDuration returns configured green duration (3.4358ms)
+ component: nextPhase transitions NS_GREEN -> NS_YELLOW (0.5494ms)
+ component: nsSignalColor maps NS_YELLOW to yellow (0.4265ms)
+ component: ewSignalColor maps EW_GREEN to green (0.9816ms)
+ component: currentEmergencySpawnBoost increases when emergency mode is on (4.7406ms)
+ component: pickVehicleType returns valid kind at upper roll boundary (0.9645ms)
+ phaseDuration falls back to allRed for unknown suffix (3.0198ms)
+ nextPhase falls back to NS_GREEN for invalid phase (0.8246ms)
+ signal color functions return red for unknown phase (0.5176ms)
+ emergency boost load factor is floored at 20% (0.8022ms)
+ emergency boost load factor is capped at 100% (0.7866ms)
+ pickVehicleType respects roll boundaries (0.6835ms)
+ pickVehicleType works with a single vehicle type (0.3322ms)
+ pickVehicleType falls back to first type when effective total weight is zero (0.2785ms)
+ phaseDuration maps phase suffix to duration (1.9707ms)
+ nextPhase follows expected 6-step cycle (0.4287ms)
+ signal color functions reflect phase ownership (0.325ms)
+ emergency spawn boost is higher in emergency mode than normal (0.6126ms)
+ cooldown strongly suppresses emergency spawn boost (1.8366ms)
+ pickVehicleType favors emergency kinds more when boost is high (0.5362ms)
+ integration: full phase cycle returns to NS_GREEN with coherent signal ownership (3.3841ms)
+ integration: emergency mode produces more emergency picks across deterministic rolls (2.6872ms)
+ integration: cooldown + active load both reduce emergency boost (0.2661ms)
+ integration: invalid phase gracefully falls back to safe defaults (0.2162ms)
+ tests 24
+ suites 0
+ pass 24
+ fail 0
+ cancelled 0
+ skipped 0
+ todo 0
+ duration_ms 863.8185
+ start of coverage report
+ ----------------------------------------------------------
+ file      | line % | branch % | funcs % | uncovered lines
+ ----------------------------------------------------------
+ model.js  | 100.00 |   100.00 |  100.00 | 
+ ----------------------------------------------------------
+ all files | 100.00 |   100.00 |  100.00 | 
+ ----------------------------------------------------------
+ end of coverage report

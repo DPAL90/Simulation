@@ -1,0 +1,14 @@
+{
+  "name": "simulation",
+  "private": true,
+  "scripts": {
+    "test": "node --test",
+    "test:all": "npm run test:regression && npm run test:component && npm run test:integration",
+    "test:all:coverage": "node --test --experimental-test-coverage model.happy.test.js model.corner.test.js model.component.test.js model.integration.test.js",
+    "test:all:coverage:summary": "node scripts/runCoverageAndSaveReports.js",
+    "test:component": "node --test model.component.test.js",
+    "test:integration": "node --test model.integration.test.js",
+    "test:regression": "node --test model.happy.test.js model.corner.test.js",
+    "test:regression:coverage": "node --test --experimental-test-coverage model.happy.test.js model.corner.test.js"
+  }
+}
