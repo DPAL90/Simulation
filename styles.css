@@ -1,0 +1,157 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background: #f4f7fb;
+  color: #1a1a1a;
+}
+
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+h1 {
+  margin: 0 0 16px;
+  font-size: 1.6rem;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+
+.controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+}
+
+.controls input {
+  border: 1px solid #c9d1e0;
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 0.95rem;
+}
+
+.controls button {
+  border: none;
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: #1565c0;
+  color: #fff;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.controls button:hover {
+  background: #0f4f9b;
+}
+
+.statusRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.signalGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.signalGroup h2 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.lightPanel {
+  display: flex;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #2d2d2d;
+}
+
+.light {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  opacity: 0.3;
+}
+
+.light.red {
+  background: #ef5350;
+}
+
+.light.yellow {
+  background: #f9a825;
+}
+
+.light.green {
+  background: #4caf50;
+}
+
+.light.active {
+  opacity: 1;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.8);
+}
+
+.phaseLabel {
+  margin: 0;
+  font-weight: 700;
+}
+
+.phasePanel {
+  background: #ffffff;
+  border: 1px solid #cdd7e5;
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+
+.phaseSubline {
+  margin: 4px 0 0;
+  font-size: 0.9rem;
+}
+
+.stateBadge {
+  display: inline-block;
+  min-width: 42px;
+  text-align: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.stateBadge.go {
+  background: #2e7d32;
+}
+
+.stateBadge.stop {
+  background: #c62828;
+}
+
+.stateBadge.wait {
+  background: #ef6c00;
+}
+
+#simCanvas {
+  width: 100%;
+  display: block;
+  border-radius: 10px;
+  border: 1px solid #cdd7e5;
+  background: #d9ecff;
+}

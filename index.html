@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>4-Way Traffic Signal Simulation</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>4-Way Traffic Signal Simulation</h1>
+
+    <section class="controls">
+      <label>
+        Lanes
+        <input id="laneCount" type="number" min="1" max="4" value="3" />
+      </label>
+
+      <label>
+        Cars / lane / min
+        <input id="spawnRate" type="number" min="6" max="120" value="24" />
+      </label>
+
+      <label>
+        Green (s)
+        <input id="greenSeconds" type="number" min="2" max="20" value="7" />
+      </label>
+
+      <label>
+        Yellow (s)
+        <input id="yellowSeconds" type="number" min="1" max="8" value="2" />
+      </label>
+
+      <label>
+        All-Red (s)
+        <input id="redSeconds" type="number" min="2" max="20" value="7" />
+      </label>
+
+      <button id="applySettings" type="button">Apply</button>
+    </section>
+
+    <section class="statusRow">
+      <div class="signalGroup" aria-label="North-South signal">
+        <h2>North / South</h2>
+        <div class="lightPanel">
+          <span id="nsRed" class="light red"></span>
+          <span id="nsYellow" class="light yellow"></span>
+          <span id="nsGreen" class="light green"></span>
+        </div>
+      </div>
+
+      <div class="signalGroup" aria-label="East-West signal">
+        <h2>East / West</h2>
+        <div class="lightPanel">
+          <span id="ewRed" class="light red"></span>
+          <span id="ewYellow" class="light yellow"></span>
+          <span id="ewGreen" class="light green"></span>
+        </div>
+      </div>
+      <div class="phasePanel" aria-live="polite">
+        <p id="phaseLabel" class="phaseLabel">Current: North/South Green</p>
+        <p class="phaseSubline">
+          NS: <span id="nsState" class="stateBadge go">GO</span>
+          EW: <span id="ewState" class="stateBadge stop">STOP</span>
+          Next: <span id="nextPhaseLabel">North/South Yellow</span>
+          Next change in <span id="phaseCountdown">7.0s</span>
+        </p>
+      </div>
+    </section>
+
+    <canvas id="simCanvas" width="1000" height="420"></canvas>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>

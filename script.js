@@ -1,0 +1,796 @@
+const canvas = document.getElementById("simCanvas");
+const ctx = canvas.getContext("2d");
+
+const laneCountInput = document.getElementById("laneCount");
+const spawnRateInput = document.getElementById("spawnRate");
+const greenInput = document.getElementById("greenSeconds");
+const yellowInput = document.getElementById("yellowSeconds");
+const redInput = document.getElementById("redSeconds");
+const applyButton = document.getElementById("applySettings");
+
+const nsRedLight = document.getElementById("nsRed");
+const nsYellowLight = document.getElementById("nsYellow");
+const nsGreenLight = document.getElementById("nsGreen");
+const ewRedLight = document.getElementById("ewRed");
+const ewYellowLight = document.getElementById("ewYellow");
+const ewGreenLight = document.getElementById("ewGreen");
+const phaseLabel = document.getElementById("phaseLabel");
+const nsState = document.getElementById("nsState");
+const ewState = document.getElementById("ewState");
+const nextPhaseLabel = document.getElementById("nextPhaseLabel");
+const phaseCountdown = document.getElementById("phaseCountdown");
+
+const MARGIN = 30;
+const LANE_WIDTH = 30;
+const FOLLOW_GAP = 14;
+const STOP_BUFFER = 8;
+const MAX_VEHICLE_LENGTH = 56;
+const STOP_MARGIN = 3;
+const STOP_EPSILON = 0.25;
+
+const VEHICLE_TYPES = [
+  { kind: "car", weight: 0.58, length: 34, width: 18, minSpeed: 85, maxSpeed: 125 },
+  { kind: "truck", weight: 0.22, length: 52, width: 22, minSpeed: 58, maxSpeed: 85 },
+  { kind: "bike", weight: 0.2, length: 24, width: 10, minSpeed: 95, maxSpeed: 145 },
+];
+
+const palette = ["#2e7d32", "#6a1b9a", "#ef6c00", "#0277bd", "#5d4037", "#d81b60"];
+
+const state = {
+  lanes: {
+    N: [],
+    S: [],
+    E: [],
+    W: [],
+  },
+  laneCount: 3,
+  spawnPerMinute: 24,
+  phaseDurations: {
+    green: 7,
+    yellow: 2,
+    allRed: 2,
+  },
+  phase: "NS_GREEN",
+  phaseElapsed: 0,
+  lastTime: 0,
+  idCounter: 0,
+  geometry: null,
+};
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function eachLane(callback) {
+  Object.values(state.lanes).forEach((group) => {
+    group.forEach((lane) => callback(lane));
+  });
+}
+
+function phaseDuration(phase) {
+  if (phase.endsWith("GREEN")) return state.phaseDurations.green;
+  if (phase.endsWith("YELLOW")) return state.phaseDurations.yellow;
+  return state.phaseDurations.allRed;
+}
+
+function nextPhase(current) {
+  if (current === "NS_GREEN") return "NS_YELLOW";
+  if (current === "NS_YELLOW") return "ALL_RED_NS_TO_EW";
+  if (current === "ALL_RED_NS_TO_EW") return "EW_GREEN";
+  if (current === "EW_GREEN") return "EW_YELLOW";
+  if (current === "EW_YELLOW") return "ALL_RED_EW_TO_NS";
+  return "NS_GREEN";
+}
+
+function nsSignalColor() {
+  if (state.phase === "NS_GREEN") return "green";
+  if (state.phase === "NS_YELLOW") return "yellow";
+  return "red";
+}
+
+function ewSignalColor() {
+  if (state.phase === "EW_GREEN") return "green";
+  if (state.phase === "EW_YELLOW") return "yellow";
+  return "red";
+}
+
+function readablePhaseNameFor(phase) {
+  if (phase === "NS_GREEN") return "North/South Green";
+  if (phase === "NS_YELLOW") return "North/South Yellow";
+  if (phase === "EW_GREEN") return "East/West Green";
+  if (phase === "EW_YELLOW") return "East/West Yellow";
+  return "All Red Transition";
+}
+
+function signalStateText(color) {
+  if (color === "green") return "GO";
+  if (color === "yellow") return "WAIT";
+  return "STOP";
+}
+
+function stateClass(color) {
+  if (color === "green") return "go";
+  if (color === "yellow") return "wait";
+  return "stop";
+}
+
+function updatePhasePanel() {
+  const nsColor = nsSignalColor();
+  const ewColor = ewSignalColor();
+
+  phaseLabel.textContent = `Current: ${readablePhaseNameFor(state.phase)}`;
+
+  nsState.textContent = signalStateText(nsColor);
+  nsState.className = `stateBadge ${stateClass(nsColor)}`;
+
+  ewState.textContent = signalStateText(ewColor);
+  ewState.className = `stateBadge ${stateClass(ewColor)}`;
+
+  nextPhaseLabel.textContent = readablePhaseNameFor(nextPhase(state.phase));
+
+  const secondsLeft = Math.max(0, phaseDuration(state.phase) - state.phaseElapsed);
+  phaseCountdown.textContent = `${secondsLeft.toFixed(1)}s`;
+}
+
+function buildLanes(count) {
+  const makeGroup = (approach) => Array.from({ length: count }, (_, index) => ({
+    approach,
+    index,
+    cars: [],
+    spawnTimer: 0,
+  }));
+
+  state.lanes.N = makeGroup("N");
+  state.lanes.S = makeGroup("S");
+  state.lanes.E = makeGroup("E");
+  state.lanes.W = makeGroup("W");
+}
+
+function resizeCanvas() {
+  canvas.width = 1000;
+  canvas.height = 620;
+}
+
+function updateLightUI() {
+  const nsColor = nsSignalColor();
+  const ewColor = ewSignalColor();
+
+  nsRedLight.classList.toggle("active", nsColor === "red");
+  nsYellowLight.classList.toggle("active", nsColor === "yellow");
+  nsGreenLight.classList.toggle("active", nsColor === "green");
+
+  ewRedLight.classList.toggle("active", ewColor === "red");
+  ewYellowLight.classList.toggle("active", ewColor === "yellow");
+  ewGreenLight.classList.toggle("active", ewColor === "green");
+
+  updatePhasePanel();
+}
+
+function updateGeometry() {
+  const centerX = canvas.width / 2;
+  const centerY = canvas.height / 2;
+  const halfRoad = state.laneCount * LANE_WIDTH;
+
+  const laneYWest = (laneIndex) => centerY - LANE_WIDTH * (laneIndex + 0.5);
+  const laneYEast = (laneIndex) => centerY + LANE_WIDTH * (laneIndex + 0.5);
+  const laneXNorth = (laneIndex) => centerX + LANE_WIDTH * (laneIndex + 0.5);
+  const laneXSouth = (laneIndex) => centerX - LANE_WIDTH * (laneIndex + 0.5);
+
+  state.geometry = {
+    centerX,
+    centerY,
+    halfRoad,
+    laneYWest,
+    laneYEast,
+    laneXNorth,
+    laneXSouth,
+    stopLines: {
+      W: centerX - halfRoad - STOP_BUFFER,
+      E: centerX + halfRoad + STOP_BUFFER,
+      N: centerY - halfRoad - STOP_BUFFER,
+      S: centerY + halfRoad + STOP_BUFFER,
+    },
+  };
+}
+
+function updatePhase(dt) {
+  state.phaseElapsed += dt;
+  const currentDuration = phaseDuration(state.phase);
+  if (state.phaseElapsed >= currentDuration) {
+    state.phase = nextPhase(state.phase);
+    state.phaseElapsed = 0;
+    updateLightUI();
+  }
+}
+
+function canSpawnInLane(lane) {
+  if (lane.cars.length === 0) return true;
+  return lane.cars[0].d > lane.cars[0].length + FOLLOW_GAP;
+}
+
+function pickVehicleType() {
+  const roll = Math.random();
+  let cumulative = 0;
+  for (const type of VEHICLE_TYPES) {
+    cumulative += type.weight;
+    if (roll <= cumulative) {
+      return type;
+    }
+  }
+  return VEHICLE_TYPES[0];
+}
+
+function createCar(lane) {
+  const type = pickVehicleType();
+  return {
+    id: state.idCounter++,
+    d: 0,
+    kind: type.kind,
+    length: type.length,
+    width: type.width,
+    speed: type.minSpeed + Math.random() * (type.maxSpeed - type.minSpeed),
+    isBraking: false,
+    color: palette[lane.index % palette.length],
+  };
+}
+
+function maybeSpawnCars(dt) {
+  const spawnInterval = 60 / state.spawnPerMinute;
+  eachLane((lane) => {
+    lane.spawnTimer += dt;
+    if (lane.spawnTimer >= spawnInterval) {
+      lane.spawnTimer = 0;
+      if (!canSpawnInLane(lane)) return;
+      lane.cars.push(createCar(lane));
+    }
+  });
+}
+
+function lanePathLength(approach) {
+  if (approach === "W" || approach === "E") return canvas.width + MAX_VEHICLE_LENGTH * 2;
+  return canvas.height + MAX_VEHICLE_LENGTH * 2;
+}
+
+function stopDistanceForCar(approach, carLength) {
+  const { stopLines } = state.geometry;
+  if (approach === "W") {
+    return stopLines.W - STOP_MARGIN;
+  }
+  if (approach === "E") {
+    return canvas.width - (stopLines.E + STOP_MARGIN);
+  }
+  if (approach === "N") {
+    return stopLines.N - STOP_MARGIN;
+  }
+  return canvas.height - (stopLines.S + STOP_MARGIN);
+}
+
+function approachHasGreen(approach) {
+  if (approach === "N" || approach === "S") return state.phase === "NS_GREEN";
+  return state.phase === "EW_GREEN";
+}
+
+function updateCars(dt) {
+  eachLane((lane) => {
+    const canProceed = approachHasGreen(lane.approach);
+    lane.cars.sort((a, b) => a.d - b.d);
+
+    for (let i = lane.cars.length - 1; i >= 0; i -= 1) {
+      const car = lane.cars[i];
+      const ahead = lane.cars[i + 1] ?? null;
+      const stopDistance = stopDistanceForCar(lane.approach, car.length);
+
+      let maxAllowedD = Number.POSITIVE_INFINITY;
+
+      if (!canProceed && car.d <= stopDistance + STOP_EPSILON) {
+        maxAllowedD = Math.min(maxAllowedD, stopDistance);
+      }
+
+      if (ahead) {
+        maxAllowedD = Math.min(maxAllowedD, ahead.d - ahead.length - FOLLOW_GAP);
+      }
+
+      const proposed = car.d + car.speed * dt;
+      const nextD = Math.min(proposed, maxAllowedD);
+      car.isBraking = nextD + 0.1 < proposed;
+      car.d = nextD;
+    }
+
+    const maxDistance = lanePathLength(lane.approach);
+    lane.cars = lane.cars.filter((car) => car.d < maxDistance + car.length + 40);
+  });
+}
+
+function lanePosition(lane) {
+  const geometry = state.geometry;
+  if (lane.approach === "W") return { constant: geometry.laneYWest(lane.index), orientation: "horizontal" };
+  if (lane.approach === "E") return { constant: geometry.laneYEast(lane.index), orientation: "horizontal" };
+  if (lane.approach === "N") return { constant: geometry.laneXNorth(lane.index), orientation: "vertical" };
+  return { constant: geometry.laneXSouth(lane.index), orientation: "vertical" };
+}
+
+function carPose(lane, car) {
+  const { constant } = lanePosition(lane);
+
+  if (lane.approach === "W") {
+    return {
+      x: -car.length / 2 + car.d,
+      y: constant,
+      heading: 0,
+    };
+  }
+  if (lane.approach === "E") {
+    return {
+      x: canvas.width + car.length / 2 - car.d,
+      y: constant,
+      heading: Math.PI,
+    };
+  }
+  if (lane.approach === "N") {
+    return {
+      x: constant,
+      y: -car.length / 2 + car.d,
+      heading: Math.PI / 2,
+    };
+  }
+
+  return {
+    x: constant,
+    y: canvas.height + car.length / 2 - car.d,
+    heading: -Math.PI / 2,
+  };
+}
+
+function roundedBox(x, y, w, h, r) {
+  const radius = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + w - radius, y);
+  ctx.arcTo(x + w, y, x + w, y + radius, radius);
+  ctx.lineTo(x + w, y + h - radius);
+  ctx.arcTo(x + w, y + h, x + w - radius, y + h, radius);
+  ctx.lineTo(x + radius, y + h);
+  ctx.arcTo(x, y + h, x, y + h - radius, radius);
+  ctx.lineTo(x, y + radius);
+  ctx.arcTo(x, y, x + radius, y, radius);
+  ctx.closePath();
+}
+
+function drawWheel(x, y, radius) {
+  ctx.fillStyle = "#111";
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#7c7c7c";
+  ctx.beginPath();
+  ctx.arc(x, y, radius * 0.45, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawHeadlights(car) {
+  const bodyW = car.length;
+  const bodyH = car.width;
+  const headSize = Math.max(1.6, bodyH * 0.11);
+  const spread = bodyH * 0.28;
+
+  ctx.fillStyle = "#fff3b0";
+  ctx.shadowColor = "rgba(255, 243, 176, 0.75)";
+  ctx.shadowBlur = 8;
+  ctx.beginPath();
+  ctx.arc(bodyW / 2 - 1, -spread, headSize, 0, Math.PI * 2);
+  ctx.arc(bodyW / 2 - 1, spread, headSize, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+function drawBrakeLights(car) {
+  if (!car.isBraking) {
+    return;
+  }
+
+  const bodyW = car.length;
+  const bodyH = car.width;
+  const lampW = Math.max(2, bodyW * 0.08);
+  const lampH = Math.max(2, bodyH * 0.2);
+  const rearX = -bodyW / 2 + 1;
+  const upperY = -bodyH * 0.35;
+  const lowerY = bodyH * 0.15;
+
+  ctx.fillStyle = "#ff3b30";
+  ctx.shadowColor = "rgba(255, 59, 48, 0.8)";
+  ctx.shadowBlur = 10;
+  roundedBox(rearX, upperY, lampW, lampH, 2);
+  ctx.fill();
+  roundedBox(rearX, lowerY, lampW, lampH, 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+function drawCarSprite(car) {
+  const bodyW = car.length;
+  const bodyH = car.width;
+  ctx.fillStyle = car.color;
+  roundedBox(-bodyW / 2, -bodyH / 2, bodyW, bodyH, 6);
+  ctx.fill();
+
+  ctx.fillStyle = "#bfd7ef";
+  roundedBox(-bodyW * 0.18, -bodyH * 0.32, bodyW * 0.36, bodyH * 0.64, 4);
+  ctx.fill();
+
+  drawWheel(-bodyW * 0.28, -bodyH * 0.58, bodyH * 0.17);
+  drawWheel(bodyW * 0.28, -bodyH * 0.58, bodyH * 0.17);
+  drawWheel(-bodyW * 0.28, bodyH * 0.58, bodyH * 0.17);
+  drawWheel(bodyW * 0.28, bodyH * 0.58, bodyH * 0.17);
+
+  drawHeadlights(car);
+  drawBrakeLights(car);
+}
+
+function drawTruckSprite(car) {
+  const bodyW = car.length;
+  const bodyH = car.width;
+  const trailerW = bodyW * 0.72;
+  const cabW = bodyW * 0.28;
+
+  ctx.fillStyle = "#607d8b";
+  roundedBox(-bodyW / 2, -bodyH / 2, trailerW, bodyH, 3);
+  ctx.fill();
+
+  ctx.fillStyle = car.color;
+  roundedBox(-bodyW / 2 + trailerW, -bodyH / 2, cabW, bodyH, 3);
+  ctx.fill();
+
+  ctx.fillStyle = "#d6e7f8";
+  roundedBox(bodyW * 0.17, -bodyH * 0.28, bodyW * 0.16, bodyH * 0.56, 2);
+  ctx.fill();
+
+  drawWheel(-bodyW * 0.28, -bodyH * 0.62, bodyH * 0.16);
+  drawWheel(bodyW * 0.08, -bodyH * 0.62, bodyH * 0.16);
+  drawWheel(-bodyW * 0.28, bodyH * 0.62, bodyH * 0.16);
+  drawWheel(bodyW * 0.08, bodyH * 0.62, bodyH * 0.16);
+
+  drawHeadlights(car);
+  drawBrakeLights(car);
+}
+
+function drawBikeSprite(car) {
+  const bodyW = car.length;
+  const bodyH = car.width;
+  const wheelR = bodyH * 0.45;
+
+  drawWheel(-bodyW * 0.25, 0, wheelR);
+  drawWheel(bodyW * 0.25, 0, wheelR);
+
+  ctx.strokeStyle = car.color;
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.moveTo(-bodyW * 0.25, 0);
+  ctx.lineTo(-bodyW * 0.03, -bodyH * 0.45);
+  ctx.lineTo(bodyW * 0.15, 0);
+  ctx.lineTo(-bodyW * 0.05, 0);
+  ctx.lineTo(-bodyW * 0.25, 0);
+  ctx.stroke();
+
+  ctx.strokeStyle = "#f1f5f8";
+  ctx.beginPath();
+  ctx.moveTo(bodyW * 0.12, -bodyH * 0.5);
+  ctx.lineTo(bodyW * 0.27, -bodyH * 0.62);
+  ctx.stroke();
+
+  ctx.fillStyle = "#263238";
+  roundedBox(-bodyW * 0.02, -bodyH * 0.62, bodyW * 0.12, bodyH * 0.22, 2);
+  ctx.fill();
+
+  ctx.fillStyle = "#fff3b0";
+  ctx.shadowColor = "rgba(255, 243, 176, 0.75)";
+  ctx.shadowBlur = 8;
+  ctx.beginPath();
+  ctx.arc(bodyW * 0.28, -bodyH * 0.1, Math.max(1.4, bodyH * 0.16), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  if (car.isBraking) {
+    ctx.fillStyle = "#ff3b30";
+    ctx.shadowColor = "rgba(255, 59, 48, 0.8)";
+    ctx.shadowBlur = 9;
+    ctx.beginPath();
+    ctx.arc(-bodyW * 0.3, -bodyH * 0.08, Math.max(1.2, bodyH * 0.14), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+}
+
+function drawVehicle(lane, car) {
+  const pose = carPose(lane, car);
+
+  ctx.save();
+  ctx.translate(pose.x, pose.y);
+  ctx.rotate(pose.heading);
+
+  if (car.kind === "truck") {
+    drawTruckSprite(car);
+  } else if (car.kind === "bike") {
+    drawBikeSprite(car);
+  } else {
+    drawCarSprite(car);
+  }
+
+  ctx.restore();
+}
+
+function drawRoadMarkings(centerX, centerY, halfRoad) {
+  ctx.strokeStyle = "rgba(210, 224, 240, 0.75)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([12, 10]);
+
+  for (let lane = 1; lane < state.laneCount; lane += 1) {
+    const yTopHalf = centerY - lane * LANE_WIDTH;
+    const yBottomHalf = centerY + lane * LANE_WIDTH;
+
+    ctx.beginPath();
+    ctx.moveTo(MARGIN, yTopHalf);
+    ctx.lineTo(centerX - halfRoad, yTopHalf);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(centerX + halfRoad, yTopHalf);
+    ctx.lineTo(canvas.width - MARGIN, yTopHalf);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(MARGIN, yBottomHalf);
+    ctx.lineTo(centerX - halfRoad, yBottomHalf);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(centerX + halfRoad, yBottomHalf);
+    ctx.lineTo(canvas.width - MARGIN, yBottomHalf);
+    ctx.stroke();
+
+    const xRightHalf = centerX + lane * LANE_WIDTH;
+    const xLeftHalf = centerX - lane * LANE_WIDTH;
+
+    ctx.beginPath();
+    ctx.moveTo(xRightHalf, MARGIN);
+    ctx.lineTo(xRightHalf, centerY - halfRoad);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(xRightHalf, centerY + halfRoad);
+    ctx.lineTo(xRightHalf, canvas.height - MARGIN);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(xLeftHalf, MARGIN);
+    ctx.lineTo(xLeftHalf, centerY - halfRoad);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(xLeftHalf, centerY + halfRoad);
+    ctx.lineTo(xLeftHalf, canvas.height - MARGIN);
+    ctx.stroke();
+  }
+
+  ctx.setLineDash([]);
+
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 3;
+  const stop = state.geometry.stopLines;
+
+  ctx.beginPath();
+  ctx.moveTo(stop.W, centerY - halfRoad);
+  ctx.lineTo(stop.W, centerY + halfRoad);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(stop.E, centerY - halfRoad);
+  ctx.lineTo(stop.E, centerY + halfRoad);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(centerX - halfRoad, stop.N);
+  ctx.lineTo(centerX + halfRoad, stop.N);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(centerX - halfRoad, stop.S);
+  ctx.lineTo(centerX + halfRoad, stop.S);
+  ctx.stroke();
+}
+
+function drawArrowAt(x, y, heading, color) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(heading);
+
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 2.2;
+  ctx.lineCap = "round";
+
+  ctx.beginPath();
+  ctx.moveTo(-8, 0);
+  ctx.lineTo(7, 0);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(7, 0);
+  ctx.lineTo(2, -4);
+  ctx.lineTo(2, 4);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawLaneDirectionIndicators(centerX, centerY, halfRoad) {
+  const stop = state.geometry.stopLines;
+  const nsCanGo = approachHasGreen("N");
+  const ewCanGo = approachHasGreen("W");
+
+  const nsColor = nsCanGo ? "#8de7a0" : "#ff8a80";
+  const ewColor = ewCanGo ? "#8de7a0" : "#ff8a80";
+
+  const bandThickness = 5;
+  const bandAlpha = 0.85;
+  ctx.save();
+  ctx.globalAlpha = bandAlpha;
+  ctx.fillStyle = ewColor;
+  ctx.fillRect(stop.W - 2, centerY - halfRoad, bandThickness, halfRoad * 2);
+  ctx.fillRect(stop.E - bandThickness + 2, centerY - halfRoad, bandThickness, halfRoad * 2);
+
+  ctx.fillStyle = nsColor;
+  ctx.fillRect(centerX - halfRoad, stop.N - 2, halfRoad * 2, bandThickness);
+  ctx.fillRect(centerX - halfRoad, stop.S - bandThickness + 2, halfRoad * 2, bandThickness);
+
+  ctx.fillStyle = "rgba(255, 255, 255, 0.18)";
+  ctx.fillRect(MARGIN, centerY - 1, centerX - halfRoad - MARGIN, 2);
+  ctx.fillRect(centerX + halfRoad, centerY - 1, canvas.width - MARGIN - (centerX + halfRoad), 2);
+  ctx.fillRect(centerX - 1, MARGIN, 2, centerY - halfRoad - MARGIN);
+  ctx.fillRect(centerX - 1, centerY + halfRoad, 2, canvas.height - MARGIN - (centerY + halfRoad));
+  ctx.restore();
+
+  state.lanes.W.forEach((lane) => {
+    const y = state.geometry.laneYWest(lane.index);
+    drawArrowAt(stop.W - 18, y, 0, ewColor);
+  });
+
+  state.lanes.E.forEach((lane) => {
+    const y = state.geometry.laneYEast(lane.index);
+    drawArrowAt(stop.E + 18, y, Math.PI, ewColor);
+  });
+
+  state.lanes.N.forEach((lane) => {
+    const x = state.geometry.laneXNorth(lane.index);
+    drawArrowAt(x, stop.N - 18, Math.PI / 2, nsColor);
+  });
+
+  state.lanes.S.forEach((lane) => {
+    const x = state.geometry.laneXSouth(lane.index);
+    drawArrowAt(x, stop.S + 18, -Math.PI / 2, nsColor);
+  });
+}
+
+function drawCars() {
+  eachLane((lane) => {
+    lane.cars.forEach((car) => {
+      drawVehicle(lane, car);
+    });
+  });
+}
+
+function drawTrafficLights(centerX, centerY, halfRoad) {
+  const poleColor = "#263238";
+  const cabinetColor = "#171c22";
+  const lampOff = "#3b3f46";
+
+  function drawSignalHead(anchorX, anchorY, facing, activeColor) {
+    const headW = 20;
+    const headH = 44;
+    const r = 5;
+
+    ctx.save();
+    ctx.translate(anchorX, anchorY);
+    ctx.rotate(facing);
+
+    ctx.fillStyle = poleColor;
+    ctx.fillRect(-3, 14, 6, 26);
+
+    ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
+    roundedBox(-headW / 2 - 2, -headH / 2 - 2, headW + 4, headH + 4, 4);
+    ctx.fill();
+
+    ctx.fillStyle = cabinetColor;
+    roundedBox(-headW / 2, -headH / 2, headW, headH, 3);
+    ctx.fill();
+
+    const lamps = [
+      { name: "red", y: -13, color: "#ef5350" },
+      { name: "yellow", y: 0, color: "#f9a825" },
+      { name: "green", y: 13, color: "#4caf50" },
+    ];
+
+    lamps.forEach((lamp) => {
+      const isActive = activeColor === lamp.name;
+      ctx.fillStyle = isActive ? lamp.color : lampOff;
+      if (isActive) {
+        ctx.shadowColor = lamp.color;
+        ctx.shadowBlur = 12;
+      }
+      ctx.beginPath();
+      ctx.arc(0, lamp.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    });
+
+    ctx.restore();
+  }
+
+  const nsColor = nsSignalColor();
+  const ewColor = ewSignalColor();
+  const stop = state.geometry.stopLines;
+
+  const westLaneMidY = centerY - halfRoad / 2;
+  const eastLaneMidY = centerY + halfRoad / 2;
+  const northLaneMidX = centerX + halfRoad / 2;
+  const southLaneMidX = centerX - halfRoad / 2;
+
+  drawSignalHead(stop.W - 14, westLaneMidY, 0, ewColor);
+  drawSignalHead(stop.E + 14, eastLaneMidY, Math.PI, ewColor);
+  drawSignalHead(northLaneMidX, stop.N - 14, Math.PI / 2, nsColor);
+  drawSignalHead(southLaneMidX, stop.S + 14, -Math.PI / 2, nsColor);
+}
+
+function drawScene() {
+  const { centerX, centerY, halfRoad } = state.geometry;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = "#d9ecff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = "#3f4a57";
+  ctx.fillRect(MARGIN, centerY - halfRoad, canvas.width - MARGIN * 2, halfRoad * 2);
+  ctx.fillRect(centerX - halfRoad, MARGIN, halfRoad * 2, canvas.height - MARGIN * 2);
+
+  drawRoadMarkings(centerX, centerY, halfRoad);
+  drawLaneDirectionIndicators(centerX, centerY, halfRoad);
+  drawCars();
+  drawTrafficLights(centerX, centerY, halfRoad);
+}
+
+function step(timestamp) {
+  if (!state.lastTime) {
+    state.lastTime = timestamp;
+  }
+  const dt = (timestamp - state.lastTime) / 1000;
+  state.lastTime = timestamp;
+
+  updatePhase(dt);
+  updatePhasePanel();
+  maybeSpawnCars(dt);
+  updateCars(dt);
+  drawScene();
+
+  requestAnimationFrame(step);
+}
+
+function applySettings() {
+  state.laneCount = clamp(Number(laneCountInput.value) || 3, 1, 4);
+  state.spawnPerMinute = clamp(Number(spawnRateInput.value) || 24, 6, 120);
+  state.phaseDurations.green = clamp(Number(greenInput.value) || 7, 2, 20);
+  state.phaseDurations.yellow = clamp(Number(yellowInput.value) || 2, 1, 8);
+  state.phaseDurations.allRed = clamp(Number(redInput.value) || 2, 1, 10);
+
+  laneCountInput.value = String(state.laneCount);
+  spawnRateInput.value = String(state.spawnPerMinute);
+  greenInput.value = String(state.phaseDurations.green);
+  yellowInput.value = String(state.phaseDurations.yellow);
+  redInput.value = String(state.phaseDurations.allRed);
+
+  buildLanes(state.laneCount);
+  resizeCanvas();
+  updateGeometry();
+}
+
+applyButton.addEventListener("click", applySettings);
+
+applySettings();
+updateLightUI();
+requestAnimationFrame(step);
