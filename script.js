@@ -7,6 +7,7 @@ const greenInput = document.getElementById("greenSeconds");
 const yellowInput = document.getElementById("yellowSeconds");
 const redInput = document.getElementById("redSeconds");
 const applyButton = document.getElementById("applySettings");
+const emergencyModeButton = document.getElementById("emergencyMode");
 
 const nsRedLight = document.getElementById("nsRed");
 const nsYellowLight = document.getElementById("nsYellow");
@@ -19,6 +20,7 @@ const nsState = document.getElementById("nsState");
 const ewState = document.getElementById("ewState");
 const nextPhaseLabel = document.getElementById("nextPhaseLabel");
 const phaseCountdown = document.getElementById("phaseCountdown");
+const emergencyStatus = document.getElementById("emergencyStatus");
 
 const MARGIN = 30;
 const LANE_WIDTH = 30;
@@ -31,11 +33,18 @@ const BIKE_LANE_WIDTH = 14;
 const FOOTPATH_WIDTH = 18;
 const BIKE_FOLLOW_GAP = 10;
 const CROSSING_OFFSET = 14;
+const PRIORITY_ALERT_DISTANCE = 95;
+const YIELD_SPEED_MULTIPLIER = 1.18;
+const PRIORITY_GAP_FACTOR = 0.65;
+const YIELD_FOLLOW_GAP_FACTOR = 0.55;
+const YIELD_STOPLINE_CREEP = 10;
 
 const VEHICLE_TYPES = [
-  { kind: "car", weight: 0.58, length: 25, width: 14, minSpeed: 85, maxSpeed: 125 },
+  { kind: "car", weight: 0.53, length: 25, width: 14, minSpeed: 85, maxSpeed: 125 },
   { kind: "truck", weight: 0.22, length: 40, width: 17, minSpeed: 58, maxSpeed: 85 },
-  { kind: "bike", weight: 0.2, length: 18, width: 7, minSpeed: 95, maxSpeed: 145 },
+  { kind: "bike", weight: 0.19, length: 18, width: 7, minSpeed: 95, maxSpeed: 145 },
+  { kind: "ambulance", weight: 0.03, length: 29, width: 15, minSpeed: 115, maxSpeed: 150 },
+  { kind: "police", weight: 0.03, length: 27, width: 14, minSpeed: 110, maxSpeed: 145 },
 ];
 
 const palette = ["#2e7d32", "#6a1b9a", "#ef6c00", "#0277bd", "#5d4037", "#d81b60"];
@@ -68,6 +77,8 @@ const state = {
   },
   phase: "NS_GREEN",
   phaseElapsed: 0,
+  emergencyMode: false,
+  prioritySpawnCooldownUntil: 0,
   lastTime: 0,
   idCounter: 0,
   geometry: null,
@@ -81,6 +92,29 @@ function eachLane(callback) {
   Object.values(state.lanes).forEach((group) => {
     group.forEach((lane) => callback(lane));
   });
+}
+
+function countActivePriorityVehicles() {
+  let count = 0;
+  eachLane((lane) => {
+    lane.cars.forEach((car) => {
+      if (car.isPriority) {
+        count += 1;
+      }
+    });
+  });
+  return count;
+}
+
+function currentEmergencySpawnBoost() {
+  const now = performance.now();
+  const baseBoost = state.emergencyMode ? 2.8 : 1;
+  const pulse = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(now / 4200));
+  const activePriority = countActivePriorityVehicles();
+  const targetActive = state.emergencyMode ? 4 : 2;
+  const loadFactor = clamp(1 - activePriority / targetActive, 0.2, 1);
+  const cooldownFactor = now < state.prioritySpawnCooldownUntil ? 0.25 : 1;
+  return baseBoost * pulse * loadFactor * cooldownFactor;
 }
 
 function phaseDuration(phase) {
@@ -236,18 +270,42 @@ function canSpawnInLane(lane) {
 
 function pickVehicleType() {
   const roll = Math.random();
+  const emergencyBoost = currentEmergencySpawnBoost();
+  const totalWeight = VEHICLE_TYPES.reduce((sum, type) => {
+    const adjusted = (type.kind === "ambulance" || type.kind === "police") ? type.weight * emergencyBoost : type.weight;
+    return sum + adjusted;
+  }, 0);
+
   let cumulative = 0;
   for (const type of VEHICLE_TYPES) {
-    cumulative += type.weight;
-    if (roll <= cumulative) {
+    const adjusted = (type.kind === "ambulance" || type.kind === "police") ? type.weight * emergencyBoost : type.weight;
+    cumulative += adjusted;
+    if (roll <= cumulative / totalWeight) {
       return type;
     }
   }
   return VEHICLE_TYPES[0];
 }
 
+function updateEmergencyModeUI() {
+  emergencyModeButton.textContent = state.emergencyMode ? "Emergency Mode: ON" : "Emergency Mode: OFF";
+  emergencyModeButton.classList.toggle("active", state.emergencyMode);
+  emergencyStatus.textContent = state.emergencyMode ? "Emergency Priority: ON" : "Emergency Priority: OFF";
+  emergencyStatus.style.color = state.emergencyMode ? "#c62828" : "#2e7d32";
+}
+
 function createCar(lane) {
   const type = pickVehicleType();
+  const isPriority = type.kind === "ambulance" || type.kind === "police";
+
+  if (isPriority) {
+    const cooldownBase = state.emergencyMode ? 2200 : 4200;
+    state.prioritySpawnCooldownUntil = performance.now() + cooldownBase + Math.random() * 1400;
+  }
+
+  let color = palette[lane.index % palette.length];
+  if (type.kind === "ambulance") color = "#f8fbff";
+  if (type.kind === "police") color = "#1f3f7a";
 
   return {
     id: state.idCounter++,
@@ -256,8 +314,10 @@ function createCar(lane) {
     length: type.length,
     width: type.width,
     speed: type.minSpeed + Math.random() * (type.maxSpeed - type.minSpeed),
+    isPriority,
+    yieldForPriority: false,
     isBraking: false,
-    color: palette[lane.index % palette.length],
+    color,
   };
 }
 
@@ -369,23 +429,45 @@ function updateCars(dt) {
   eachLane((lane) => {
     const canProceed = approachHasGreen(lane.approach);
     lane.cars.sort((a, b) => a.d - b.d);
+    lane.cars.forEach((car) => {
+      car.yieldForPriority = false;
+    });
 
     for (let i = lane.cars.length - 1; i >= 0; i -= 1) {
       const car = lane.cars[i];
       const ahead = lane.cars[i + 1] ?? null;
       const stopDistance = stopDistanceForCar(lane.approach);
 
+      if (!car.isPriority) {
+        for (let j = i - 1; j >= 0; j -= 1) {
+          const behindCandidate = lane.cars[j];
+          if (!behindCandidate.isPriority) {
+            continue;
+          }
+
+          const priorityDistance = car.d - behindCandidate.d;
+          if (priorityDistance > 0 && priorityDistance < PRIORITY_ALERT_DISTANCE) {
+            car.yieldForPriority = true;
+          }
+          break;
+        }
+      }
+
       let maxAllowedD = Number.POSITIVE_INFINITY;
 
       if (!canProceed && car.d <= stopDistance + STOP_EPSILON) {
-        maxAllowedD = Math.min(maxAllowedD, stopDistance);
+        const redStopTarget = car.yieldForPriority ? stopDistance + YIELD_STOPLINE_CREEP : stopDistance;
+        maxAllowedD = Math.min(maxAllowedD, redStopTarget);
       }
 
       if (ahead) {
-        maxAllowedD = Math.min(maxAllowedD, ahead.d - ahead.length - FOLLOW_GAP);
+        const yieldGap = car.yieldForPriority ? FOLLOW_GAP * YIELD_FOLLOW_GAP_FACTOR : FOLLOW_GAP;
+        const followGap = car.isPriority ? FOLLOW_GAP * PRIORITY_GAP_FACTOR : FOLLOW_GAP;
+        maxAllowedD = Math.min(maxAllowedD, ahead.d - ahead.length - (car.isPriority ? followGap : yieldGap));
       }
 
-      const proposed = car.d + car.speed * dt;
+      const speedFactor = car.yieldForPriority ? YIELD_SPEED_MULTIPLIER : 1;
+      const proposed = car.d + car.speed * speedFactor * dt;
       const nextD = Math.min(proposed, maxAllowedD);
       car.isBraking = nextD + 0.1 < proposed;
       car.d = nextD;
@@ -545,12 +627,64 @@ function drawBrakeLights(car) {
   ctx.shadowBlur = 0;
 }
 
+function drawEmergencyLights(car) {
+  if (!car.isPriority) return;
+
+  const bodyW = car.length;
+  const bodyH = car.width;
+  const blinkOn = Math.sin(performance.now() / 120 + car.id) > 0;
+  const leftColor = car.kind === "ambulance" ? (blinkOn ? "#ff3b30" : "#4fc3f7") : (blinkOn ? "#4fc3f7" : "#ff3b30");
+  const rightColor = car.kind === "ambulance" ? (blinkOn ? "#4fc3f7" : "#ff3b30") : (blinkOn ? "#ff3b30" : "#4fc3f7");
+
+  const barY = -bodyH * 0.64;
+  roundedBox(-bodyW * 0.16, barY, bodyW * 0.32, bodyH * 0.18, 2);
+  ctx.fillStyle = "#1e1e1e";
+  ctx.fill();
+
+  roundedBox(-bodyW * 0.15, barY + 1, bodyW * 0.14, bodyH * 0.14, 2);
+  ctx.fillStyle = leftColor;
+  ctx.shadowColor = leftColor;
+  ctx.shadowBlur = 8;
+  ctx.fill();
+
+  roundedBox(bodyW * 0.01, barY + 1, bodyW * 0.14, bodyH * 0.14, 2);
+  ctx.fillStyle = rightColor;
+  ctx.shadowColor = rightColor;
+  ctx.shadowBlur = 8;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
 function drawCarSprite(car) {
   const bodyW = car.length;
   const bodyH = car.width;
   ctx.fillStyle = car.color;
   roundedBox(-bodyW / 2, -bodyH / 2, bodyW, bodyH, 6);
   ctx.fill();
+
+  if (car.yieldForPriority && !car.isPriority) {
+    ctx.strokeStyle = "#ffb300";
+    ctx.lineWidth = 1.8;
+    ctx.shadowColor = "rgba(255, 179, 0, 0.85)";
+    ctx.shadowBlur = 10;
+    roundedBox(-bodyW / 2 - 1, -bodyH / 2 - 1, bodyW + 2, bodyH + 2, 7);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  if (car.kind === "ambulance") {
+    ctx.fillStyle = "#d32f2f";
+    roundedBox(-bodyW * 0.1, -bodyH * 0.08, bodyW * 0.2, bodyH * 0.16, 1);
+    ctx.fill();
+    roundedBox(-bodyW * 0.04, -bodyH * 0.2, bodyW * 0.08, bodyH * 0.4, 1);
+    ctx.fill();
+  }
+
+  if (car.kind === "police") {
+    ctx.fillStyle = "#e9eef5";
+    roundedBox(-bodyW * 0.42, -bodyH * 0.08, bodyW * 0.84, bodyH * 0.16, 2);
+    ctx.fill();
+  }
 
   ctx.fillStyle = "#bfd7ef";
   roundedBox(-bodyW * 0.18, -bodyH * 0.32, bodyW * 0.36, bodyH * 0.64, 4);
@@ -563,6 +697,7 @@ function drawCarSprite(car) {
 
   drawHeadlights(car);
   drawBrakeLights(car);
+  drawEmergencyLights(car);
 }
 
 function drawTruckSprite(car) {
@@ -1154,7 +1289,12 @@ function applySettings() {
 }
 
 applyButton.addEventListener("click", applySettings);
+emergencyModeButton.addEventListener("click", () => {
+  state.emergencyMode = !state.emergencyMode;
+  updateEmergencyModeUI();
+});
 
 applySettings();
+updateEmergencyModeUI();
 updateLightUI();
 requestAnimationFrame(step);
