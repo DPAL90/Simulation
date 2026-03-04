@@ -1,0 +1,57 @@
+User Prompt
+===========
+
+Objective:
+- Improve and maintain the 4-way traffic simulation UI/logic without breaking existing behavior.
+- Keep simulation controls, lane visuals, bike/foot paths, and test coverage working end-to-end.
+
+Context:
+- Project: Simulation
+- Stack: plain HTML/CSS/JavaScript + Node test runner
+- Key files:
+	- index.html (controls + canvas container)
+	- styles.css (UI styling)
+	- script.js (simulation + rendering logic)
+	- model.js (testable pure model utilities)
+	- model.happy.test.js, model.corner.test.js, model.component.test.js, model.integration.test.js
+	- package.json (test scripts)
+	- .github/workflows/ci.yml (CI pipeline)
+
+Requirements:
+- Preserve existing simulation capabilities:
+	- 4-way signal phase flow (NS/EW with yellow and all-red)
+	- Custom lane count and cars/lane/min controls
+	- Bike paths and footpaths with signal-aware movement
+	- Mixed vehicles (car/truck/bike + emergency handling)
+- Keep UI simple and readable (no unnecessary new UI elements unless requested).
+- Maintain compatibility with browser runtime and Node-based tests.
+- Prefer minimal, targeted code changes.
+
+Validation:
+- Required local checks:
+	- npm run test:all
+	- npm run test:all:coverage:summary
+- Expected status:
+	- All tests passing
+	- Coverage reports updated in coverage/
+	- coverage-summary.txt generated and clean
+
+Output Format:
+- Give a concise implementation summary with:
+	- What changed
+	- Files touched
+	- Commands run and results
+	- Any follow-up action needed
+
+Prompt:
+Task: [Describe your exact requested change here]
+
+Constraints:
+- Do not change unrelated behavior.
+- Keep styles consistent with existing design.
+- Keep tests green.
+
+Done criteria:
+- Feature/fix implemented.
+- Tests and coverage command pass.
+- coverage/ reports refreshed.
